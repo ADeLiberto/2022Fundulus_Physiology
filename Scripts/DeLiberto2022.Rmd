@@ -1,0 +1,1641 @@
+---
+title: "PhysiologyManuscript"
+author: "Amanda DeLiberto"
+date: "10/28/2021"
+output: html_document
+---
+This R script accompanies manuscript: 
+TO RISE TO TEMPERATURE: VARIATION IN TEMPERATURE EFFECTS WITHIN AND AMONG POPULATIONS
+Amanda N. DeLiberto, Melissa K. Drown, Moritz A. Ehrlich, Marjorie F. Oleksiak, Douglas L. Crawford
+
+Abbreviations:
+WAM = Whole animal metabolism
+CTmax = Critical thermal maximum
+CaM = cardiac metabolism
+G = Glucose
+FA = Fatty Acids
+LKA = Lactate, ketones alcohol
+E/END/INH/I = Endogenous substrate
+aug2018_temp = habitat temp collected from hobos in august 2018
+MMT = Mean minimum average temperature from hobos
+# Set up
+
+```{r}
+#remove anything loaded in your R
+#press Ctrl-Shft-F10 if needed as well
+rm(list = ls())
+#check no packages except base are loaded - if conflicting dply, plyr, tidy packages are loaded it may interfere with the programs run
+(.packages())
+```
+
+
+## Load functions
+
+```{r}
+### Load function that generates data summary tables to be used for nice ggplots
+
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mn, std, v
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mn = mean(xx[[col]], na.rm=na.rm),
+          std   = sd(xx[[col]], na.rm=na.rm),
+          v = var(xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    datac$ste <- datac$std/sqrt(datac$N)  # Calculate standard error of the mean
+    
+    datac$cv <- datac$std/(datac$mn)  # Calculate coefficient of variation
+
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$ste * ciMult
+
+    return(datac)
+}
+
+```
+# 1 Temperature differences between local populations
+
+## Fig 1:
+### Site Map 
+
+```{r}
+#dataset for map plot
+library("rnaturalearth") #loading data for ne_countries
+library("rnaturalearthdata")
+world <- ne_countries(scale = "medium", returnclass = "sf")
+class(world)
+
+#read in site lat lon data
+sitelabs <- read.csv("../Data/sitegeograhy.csv")
+
+#load state data
+library("sf") #st_as_sf
+library("maps") # maps
+states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+head(states)
+
+#create polygon for MTDI and DI, as they are lacking in the state level data
+deerisle <- data.frame(
+  y = c(44.255, 44.248, 44.195, 44.179, 44.182, 44.237, 44.249),
+  x = c(-68.67, -68.65, -68.628, -68.66, -68.70, -68.702, -68.69))
+
+mtdi <- data.frame(
+  x = c(-68.32, -68.309, -68.31, -68.245, -68.185, -68.189, -68.24, -68.30, -68.349, -68.41, -68.41, -68.385),
+  y = c(44.25, 44.27, 44.33, 44.325, 44.34, 44.365, 44.44, 44.453, 44.435, 44.365, 44.29, 44.275))
+
+library("ggplot2")
+library(ggspatial) #annotation_scale
+library(ggrepel) #geom_text_repel for setting population text location
+
+#plot the map with labels for populations and temperature
+p1 <- ggplot() +
+  geom_polygon(data=mtdi, mapping = aes(x = x, y = y),fill="#CCCCCC",col="#666666") + 
+  geom_polygon(data=deerisle, mapping=aes(x = x, y = y),fill="#CCCCCC", col="#666666") +
+  geom_sf(data = states, fill = "#CCCCCC", col="#666666") + 
+  coord_sf(xlim = c(-76, -67), ylim = c(39, 45.5)) +
+  annotation_scale(location = "br", width_hint = 0.5) + 
+  geom_text_repel(data = sitelabs, aes(x = lon, y = lat, label = pop), 
+                  nudge_x = c(1, 1, 1, 1, 1,0.2, -0.2, -0.2, 0.2 ), 
+                  nudge_y = c(-0.5, 0, 0.5, 0.25, -0.25,0.5, -0.5, 0.5, -0.5), size=6) +
+  geom_point(data=sitelabs, aes(x=lon, y=lat, col=temp), size=3) +
+  scale_colour_gradient(name= "Habitat Temperature",low="blue", high = "red") + 
+  xlab("Longitude") + ylab("Lattitude") +
+  theme_bw() + 
+  theme(axis.text = element_text(size = 18,colour = "black"), 
+        axis.title = element_text(size = 30)) +
+  theme(legend.justification=c(1,0), 
+        legend.position =c(1,0.05), 
+        legend.text = element_text(colour="black", size=12), 
+        legend.direction= "horizontal",
+        legend.background = element_blank(),
+        legend.title = element_text(size=20),
+        legend.box.background = element_blank(),
+        legend.key = element_blank(), 
+        legend.key.height= unit(0.6, 'cm'),
+        legend.key.width= unit(1.2, 'cm')) +
+  guides(colour = guide_colorbar(title.position = "top"))
+p1
+#save the image to folder
+ggsave(file="../Output/Fig1A-map.pdf", width=7, height=6, dpi=300)
+```
+### Temperature plot
+```{r}
+#read in temp data
+hobodat <- read.csv("../Data/TemperatureData.csv")
+hobodat$pop <- factor(hobodat$pop, levels = c("SRNJ", "TENJ", "NRNJ", "RVMA", "EHMA",  "DIME", "PEAME", "PENME","OCME"))
+
+library(tidyverse)
+library(plyr)
+
+#organize datafram
+tempdat <- full_join(sitelabs,hobodat)
+tempdat <- subset(tempdat, tempdat$MMT != "NA") #remove missing
+#order by population NJ > ME
+tempdat$pop <- factor(tempdat$pop, levels = c("SRNJ", "TENJ", "NRNJ", "RVMA", "EHMA",  "DIME", "PEAME", "PENME","OCME"))
+
+#create summary table
+mean.sum.temp <- summarySE(tempdat, measurevar="MMT", groupvars=c("pop", "lat", "lon"))
+
+#anova of temperature data
+anova(aov(tempdat$MMT~tempdat$pop))
+TukeyHSD(aov(tempdat$MMT~tempdat$pop))
+
+
+#temperature plot                                   
+p2 <- ggplot(mean.sum.temp) +
+  geom_point(aes(x=pop, y=mn, col=mn), size=1) + 
+  geom_errorbar(aes(x=pop, ymin=mn-ste, ymax=mn+ste, col=mn), width=0.6, size=1) +
+  xlab("Population") + ylab("Temperature (°C)") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 15,colour = "black"), 
+        axis.title = element_text(size = 30)) +
+  scale_colour_gradient(name= "Habitat Temperature",low="blue", high = "red") + 
+  theme(legend.justification=c(1,1), legend.position =c(1,1), 
+        legend.text = element_text(colour="black", size=12), 
+        legend.direction= "horizontal",
+        legend.title = element_text(size=20),
+        legend.background = element_blank(),
+        legend.box.background = element_blank(),
+        legend.key = element_blank(), 
+        legend.key.height= unit(0.6, 'cm'),
+        legend.key.width= unit(1.2, 'cm')) +
+  guides(colour = guide_colorbar(title.position = "top"))
+p2
+
+#save plot
+ggsave(file="../Output/Fig1B-temp.pdf", width=7.5, height=6, dpi=300)
+
+(.packages())
+```
+
+# 2 Acclimation response in physiological traits
+## Load physiology data
+
+```{r fig2}
+#remove excess datafiles, except previously loaded functions 
+rm(list=ls()[! ls() %in% c("summarySE")])
+
+#load in the original WAM, CTmax, and CaM files with metadata
+datwam <- read.csv("../Data/2019WAM_MEMANJ.csv")
+datcam <-read.csv("../Data/2019CaM_MEMANJ.csv")
+datctmax <- read.csv("../Data/2019CTmax_MEMANJ.csv")
+
+#remove duplicated rows, any rows without MR data, and data that had technical issues during CaM collection because of sensor problem (>90pmol)
+library(tidyr)
+datcam  <- datcam[!duplicated(datcam), ]
+datcam <- datcam %>% drop_na(MR_pmol_s)
+datcam <- subset(datcam, datcam$pop!=TRUE)
+datcam <- subset(datcam, datcam$MR_pmol_s<90)
+
+#Data organization things to show data in order when plotting
+#order by temp so 12 > 28
+datwam$accl_temp <- factor(datwam$Temp, levels = c("12", "28"))
+datctmax$accl_temp <- factor(datctmax$Temp, levels = c("12", "28"))
+datcam$accl_temp <- factor(datcam$Temp, levels = c("12", "28"))
+datcam$substrate <- factor(datcam$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+```
+### Calculate residuals and transform to corrected data
+Residuals were calculated below as the residuals across both temperatures
+```{r}
+wam <- datwam
+ctmax <- datctmax
+cam <- datcam
+
+#wam mass residuals across data
+lm <- lm(tenth_perc_MO2_mg_hr~mass,wam) #lm of MO2~mass
+wam$wam.residuals <- lm$residuals #extract residuals
+x <- mean(wam$mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+wam$wam.corr <- wam$wam.residuals + y #add constant to residuals
+datwam <- wam
+
+#ctmax mass residuals across data
+lm <- lm(CTmax~mass,ctmax) #lm of MO2~mass
+ctmax$ctmax.residuals <- lm$residuals #extract residuals
+x <- mean(ctmax$mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+ctmax$ctmax.corr <- ctmax$ctmax.residuals + y #add constant to residuals
+datctmax <- ctmax
+
+#cam heart mass residuals per substrate
+#divide into seperate substrate dataframes
+camg <- subset(cam, cam$substrate=="Glucose" & cam$heart_mass!= "NA")
+camf <- subset(cam, cam$substrate=="FA"  & cam$heart_mass!= "NA")
+caml <- subset(cam, cam$substrate=="LKA"  & cam$heart_mass!= "NA")
+cami <- subset(cam, cam$substrate=="INH"  & cam$heart_mass!= "NA")
+#retrieve the heart mass residuals from a linear model of heart mass ~ metabolic rate for each temp/sub combo
+
+#glucose
+lm <- lm(MR_pmol_s~heart_mass,camg) #lm of MO2~mass
+camg$cam.residuals <- lm$residuals #extract residuals
+x <- mean(camg$heart_mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+camg$cam.corr <- camg$cam.residuals + y #add constant to residuals
+
+#FA
+lm <- lm(MR_pmol_s~heart_mass,camf) #lm of MO2~mass
+camf$cam.residuals <- lm$residuals #extract residuals
+x <- mean(camf$heart_mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+camf$cam.corr <- camf$cam.residuals + y #add constant to residuals
+
+#LKA
+lm <- lm(MR_pmol_s~heart_mass,caml) #lm of MO2~mass
+caml$cam.residuals <- lm$residuals #extract residuals
+x <- mean(caml$heart_mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+caml$cam.corr <- caml$cam.residuals + y #add constant to residuals
+
+#endogenous
+lm <- lm(MR_pmol_s~heart_mass,cami) #lm of MO2~mass
+cami$cam.residuals <- lm$residuals #extract residuals
+x <- mean(cami$heart_mass) #average mass
+b <- lm$coefficients[1] #intercept
+m <- lm$coefficients[2] #slope
+y = m*x + b #calcualte constant
+cami$cam.corr <- cami$cam.residuals + y #add constant to residuals
+
+
+#regroup the subsetted dataframes
+cam <- rbind(camg, camf, caml, cami)
+datcam <- cam
+
+```
+
+
+## Fig 2:
+### Stats
+```{r}
+###Body mass between acclimation temps
+t.test(wam$mass~wam$accl_temp) #WAM
+t.test(ctmax$mass~ctmax$accl_temp) #CTmax
+t.test(cam$mass~cam$accl_temp) #Cam body mass
+t.test(cam$heart_mass~cam$accl_temp) # Cam heart mass
+
+### Metabolic rate between acclimation temps for mass corrected data
+tr <- t.test(wam$tenth_perc_MO2_mg_hr~wam$accl_temp) #raw data WAM
+tr$p.value
+(tr$estimate[2]/tr$estimate[1]) #fold change in metabolism for raw data
+tc <- t.test(wam$wam.corr~wam$accl_temp) #mass corrected data WAM
+tc$p.value
+tc$estimate[2]/tc$estimate[1] #fold change in metabolism for corrected data
+ 
+### CTmax between acclimation temps
+tr <- t.test(ctmax$CTmax~ctmax$accl_temp) #raw data CTmax
+tr$p.value
+(tr$estimate[2]/tr$estimate[1]) #fold change in CTmax for raw data
+tc <- t.test(ctmax$ctmax.corr~ctmax$accl_temp) #mass corrected data CTmax
+tc$p.value
+tc$estimate[2]/tc$estimate[1] #fold change in CTmax 
+
+#ANOVA and post-hoc of two-way sub X temp for CaM 
+temp.sub.aovr <- aov(MR_pmol_s ~ accl_temp * substrate, cam) #ANOVA for cam raw data
+TukeyHSD(temp.sub.aovr)
+temp.sub.aovc <- aov(cam.corr ~ accl_temp * substrate, cam) #ANOVA for cam corrected data
+TukeyHSD(temp.sub.aovc)
+```
+
+### Accliamtion plot with mass or heart mass corrected data
+
+```{r}
+
+#make a plot of the wam differences between acclimation temperature
+library(plyr)
+sum.se <- summarySE(wam, measurevar="wam.corr", groupvars=c("accl_temp")) 
+
+#figure displaying the difference in acclimation temperature for whole animal metabolism
+p1 <- ggplot(wam, mapping=aes(accl_temp)) + 
+  geom_jitter(aes(y = wam.corr, col=aug2018_temp), size=0.25) + 
+  geom_point(sum.se, mapping = aes(x=accl_temp, y=mn), col="black", size=1) + 
+  geom_errorbar(sum.se, mapping=aes(x=accl_temp, ymin=mn-ste, ymax=mn+ste), width=0.2, lwd=0.7) + 
+  theme_bw() +
+  labs(x = "Temperature (°C)", y = "Mass Corrected MO2 (mgO2*hr-1)") +
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red") +
+  annotate("text", x = 0.45, y = 10, hjust = 0, label = "p<<0.001***", size=6) +
+  annotate("text", x = 0.45, y = 9.5, hjust=0, label = "Q10 = 1.98", size=6) +
+  ggtitle("Whole Animal Metabolism") + 
+  theme(plot.title = element_text(hjust = 0.5, size=18)) +
+  theme(axis.text = element_text(size = 18,colour = "black"), 
+        axis.title = element_text(size = 25))
+p1
+
+
+#CTmax summary table for acclimation diff
+sum.se <- summarySE(ctmax, measurevar="ctmax.corr", groupvars=c("accl_temp"))
+
+#CTmax acclimation plot
+p2 <- ggplot(ctmax, mapping=aes(accl_temp)) + 
+  geom_jitter(aes(y = ctmax.corr, col=aug2018_temp), size=0.25) + 
+  geom_point(sum.se, mapping = aes(x=accl_temp, y=mn), col="black", size=1) + 
+  geom_errorbar(sum.se, mapping=aes(x=accl_temp, ymin=mn-ste, ymax=mn+ste), width=0.2, lwd=0.7) + 
+  theme_bw() +
+  labs(x = "Temperature (°C)", y = "Mass Corrected CTmax (°C)") +
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red") +
+  annotate("text", x = 0.45, y = 43, hjust = 0, label = "p<<0.001***", size=6) +
+  annotate("text", x = 0.45, y = 42, hjust=0, label = "Q10 = 1.11", size=6) +
+  ggtitle("Critical Thermal Maximum") + 
+  theme(plot.title = element_text(hjust = 0.5, size=18)) +
+  theme(axis.text = element_text(size = 18,colour = "black"), 
+        axis.title = element_text(size = 25))
+p2
+#summary table for CaM of the acclimation differences
+sum.se <- summarySE(cam, measurevar="cam.corr", groupvars=c("accl_temp", "substrate"))
+
+#create significance labels
+f_labels <- data.frame(substrate = c("Glucose", "FA", "LKA","INH"), label = c("p<<0.0001***", "p<<0.0001***", "p=0.927","p=0.010*"), q10 = c("Q10=1.18","Q10=1.13","Q10=1.03","Q10=0.90"))
+f_labels$substrate <- factor(f_labels$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+#create correct labels for the facet headings
+substrate.labs <- c("Glucose", "FA", "LKA", "Endogenous")
+names(substrate.labs) <- c("Glucose", "FA", "LKA", "INH")
+
+#plot for CaM
+p3 <- ggplot(cam, mapping=aes(accl_temp)) + 
+  geom_jitter(aes(y = cam.corr, col=aug2018_temp), size=0.25) + 
+  geom_point(sum.se, mapping = aes(x=accl_temp, y=mn), col="black",size=1) + 
+  geom_errorbar(sum.se, mapping=aes(x=accl_temp, ymin=mn-ste, ymax=mn+ste), lwd=0.7,width=0.2) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 18, colour="black"), 
+        axis.title = element_text(size = 25)) +
+  labs(x = "Temperature (°C)", y = "Heart Mass Corrected Cardiac MO2 (pmol*s-1)") +
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red") +
+  facet_grid(.~substrate, labeller = labeller(substrate = substrate.labs)) +
+  theme(strip.text.x = element_text(size = 16, color = "black")) +
+  geom_text(x = 0.5, y = 80, hjust=0,aes(label = label), data = f_labels) +
+  geom_text(x = 0.5, y = 75, hjust=0,aes(label = q10), data = f_labels)
+
+p3
+
+#final plot organizing everything together
+library(ggpubr)
+fp <- ggarrange(
+  ggarrange(p1, p2, ncol = 2, legend = "none"), 
+  p3,
+  common.legend = TRUE, legend = "bottom",
+  nrow = 2 
+  ) 
+fp
+
+#save to computer as pdf
+
+ggsave("../Output/Fig2-accldiff.pdf",  width = 8,height = 10)
+
+
+
+
+```
+
+
+
+## Fig S1:
+### Stats
+```{r}
+#remove extra files
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax")])
+
+#start with clean df
+cam <- datcam
+wam <-datwam
+ctmax <- datctmax
+
+#subset cam into heart mass, mass, temp and individual
+cam_small <- unique(cam[,c("FishID", "mass", "heart_mass","accl_temp","pop","aug2018_temp", "state")])
+cam_small_hm <- subset(cam_small, cam_small$heart_mass!="NA")
+
+
+#is mass significantly different between 12 and 28? - body mass no but heart mass yes
+t.test(mass ~ accl_temp, cam_small)$p.value #body mass
+t.test(heart_mass ~ accl_temp, cam_small)$p.value #heart mass
+
+#linear relationship between heart mass and body mass
+summary(lm(heart_mass~mass, cam_small))$coefficients[,4] #across data
+summary(lm(heart_mass~mass, subset(cam_small, cam_small$accl_temp=="12")))$coefficients[,4] #at 12
+summary(lm(heart_mass~mass, subset(cam_small, cam_small$accl_temp=="28")))$coefficients[,4] #at 28
+
+```
+
+### Heart mass and body mass plot
+
+```{r}
+
+#generate summary table to compare the heart mass and body mass between acclimation group
+sum.se.h <- summarySE(cam_small_hm, measurevar="heart_mass", groupvars=c("accl_temp")) 
+sum.se.b <- summarySE(cam_small, measurevar="mass", groupvars=c("accl_temp")) 
+
+#plot the relationship in heart mass between temps
+p1 <- ggplot(sum.se.h) + 
+  geom_point(aes(x=accl_temp, y=mn, col=accl_temp),show.legend = FALSE, size=3) +
+  geom_errorbar(aes(x=accl_temp, ymin=mn-ste, ymax=mn+ste, col=accl_temp),width=0.5, lwd=1.25, show.legend = FALSE)  +
+  theme_bw() + scale_color_manual(values=c("blue", "red")) +
+  labs(x = "Temperature (°C)", y = "Heart Mass (g)") +
+  annotate("text", x = 2.5, y = 0.0150, label = "p<<0.001***", size=8, hjust=1) +
+  theme(axis.text = element_text(size = 22), 
+        axis.title = element_text(size = 25, colour="black"))
+p1
+#plot relationship in body mass between temps
+p2 <-ggplot(sum.se.b) + 
+  geom_point(aes(x=accl_temp, y=mn, col=accl_temp),show.legend = FALSE, size=3) +
+  geom_errorbar(aes(x=accl_temp, ymin=mn-ste, ymax=mn+ste, col=accl_temp), width=0.5, lwd=1.25, show.legend = FALSE) +
+  labs(x = "Temperature (°C)", y = "Fish Mass (g)") +
+  theme_bw() + scale_color_manual(values=c("blue", "red")) +
+  annotate("text", x = 2.5, y = 10.5, label = "p=0.946", size=8, hjust=1) +
+  theme(axis.text = element_text(size = 22, color="black"), 
+        axis.title = element_text(size = 25)) 
+p2
+#plot of the linear relationship at each temperature
+p3 <- ggplot(cam_small, aes(x=mass, y=heart_mass)) + geom_point(aes(col=accl_temp)) + 
+  geom_smooth(aes(col=accl_temp), method="lm") +
+  labs(x = "Fish Mass (g)", y = "Heart Mass (g)") +
+  theme_bw() + theme(legend.position = "none")+ 
+  scale_color_manual(values=c("blue", "red")) +
+  annotate("text", x = 12.8, y = 0.055, label = "12°C: R2=0.45, p<<0.001***", hjust=0,size=7) +
+  annotate("text", x = 12.8, y = 0.050, hjust=0, label = "28°C: R2=0.66, p<<0.001***", size=7) +
+  theme(axis.text = element_text(size = 20, colour = "black"), 
+        axis.title = element_text(size = 25))
+p3
+
+library(ggpubr)
+#final plot combining above three plots
+fp <- ggarrange(
+  ggarrange(p1, p2, ncol = 2, common.legend = TRUE, legend = "bottom"), 
+  p3,
+  nrow = 2 
+  ) 
+fp
+
+#save plot
+ggsave("../Output/FigS1-heartmass.pdf",  width = 8,height = 10)
+```
+
+
+## Table S2
+
+```{r}
+#remove extra variables
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax")])
+
+#reload clean datafiles
+wam <- datwam
+cam <- datcam
+ctmax <- datctmax
+
+library(plyr)
+#calculate the means, standard dev, CV for each trait by acclimation temps with raw data
+wsumraw.table <- summarySE(wam, measurevar="tenth_perc_MO2_mg_hr", groupvars=c("accl_temp")) #WAM
+ctsumraw.table <- summarySE(ctmax, measurevar="CTmax", groupvars=c("accl_temp")) #CTmax
+casumraw.table <- summarySE(cam, measurevar="MR_pmol_s", groupvars=c("accl_temp", "substrate")) #CaM
+
+#calculate the means, standard dev, CV for each trait by acclimation temps with mass corrected data
+wsum.table <- summarySE(wam, measurevar="wam.corr", groupvars=c("accl_temp")) #WAM
+ctsum.table <- summarySE(ctmax, measurevar="ctmax.corr", groupvars=c("accl_temp")) #CTmax
+casum.table <- summarySE(cam, measurevar="cam.corr", groupvars=c("accl_temp", "substrate")) #CaM
+
+
+#testing difference in variance for each trait
+var.test(tenth_perc_MO2_mg_hr ~ accl_temp, wam)$p.value #WAM
+var.test(CTmax ~ accl_temp, ctmax)$p.value #CTmax
+var.test(MR_pmol_s ~ accl_temp, subset(cam, cam$substrate=="Glucose"))$p.value #CaM Gluc
+var.test(MR_pmol_s ~ accl_temp, subset(cam, cam$substrate=="FA"))$p.value #CaM FA
+var.test(MR_pmol_s ~ accl_temp, subset(cam, cam$substrate=="LKA"))$p.value #CaM LKA
+var.test(MR_pmol_s ~ accl_temp, subset(cam, cam$substrate=="INH"))$p.value #CaM Endogenous
+
+
+#testing difference in variance for each trait
+var.test(wam.corr ~ accl_temp, wam)$p.value #WAM
+var.test(ctmax.corr ~ accl_temp, ctmax)$p.value #CTmax
+var.test(cam.corr ~ accl_temp, subset(cam, cam$substrate=="Glucose"))$p.value #CaM Gluc
+var.test(cam.corr ~ accl_temp, subset(cam, cam$substrate=="FA"))$p.value #CaM FA
+var.test(cam.corr ~ accl_temp, subset(cam, cam$substrate=="LKA"))$p.value #CaM LKA
+var.test(cam.corr ~ accl_temp, subset(cam, cam$substrate=="INH"))$p.value #CaM Endogenous
+
+#variation in mass corrected traits per population
+wsum.table.pop <- summarySE(wam, measurevar="wam.corr", groupvars=c("accl_temp", "pop")) #WAM
+ctsum.table.pop <- summarySE(ctmax, measurevar="ctmax.corr", groupvars=c("accl_temp", "pop")) #CTmax
+casum.table.pop <- summarySE(cam, measurevar="cam.corr", groupvars=c("accl_temp", "substrate", "pop")) #CaM
+
+```
+
+# 3 Trait variance and habitat temperature
+## Fig 3:
+
+### Calculate mass residuals
+Residuals are calculated by temperature and for cam by temp and substrate
+#### WAM
+```{r}
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax")])
+
+#load clean dataframes
+wam <- datwam
+ctmax <- datctmax
+
+#subset by acclimation temp
+wam12 <- subset(wam, wam$accl_temp==12)
+wam28 <- subset(wam, wam$accl_temp==28)
+
+#retrieve the residuals from a linear model to remove the impact of mass per acclimmation temp.
+wam12$mass.residuals.bytemp <- lm(tenth_perc_MO2_mg_hr~mass, wam12)$residuals
+wam28$mass.residuals.bytemp <- lm(tenth_perc_MO2_mg_hr~mass, wam28)$residuals
+
+#rejoin the data frame
+wam <- full_join(wam12, wam28)
+```
+#### CTmax
+```{r}
+#subset by acclimation temp
+ctmax12 <- subset(ctmax, ctmax$accl_temp==12)
+ctmax28 <- subset(ctmax, ctmax$accl_temp==28)
+
+#retrieve the residuals from a linear model to remove the impact of mass per acclimmation temp.
+ctmax12$mass.residuals.bytemp <- lm(CTmax~mass, ctmax12)$residuals
+ctmax28$mass.residuals.bytemp <- lm(CTmax~mass, ctmax28)$residuals
+
+#rejoin the data frame
+ctmax <- full_join(ctmax12, ctmax28)
+```
+
+#### CaM
+Residuals by heart mass
+```{r}
+#load clean df
+cam <- datcam
+
+#calculate the mass residuals for each temp/substrate combination by heart mass
+#subsetting the data by temp and substrate
+cam12g <- subset(cam, cam$substrate=="Glucose" & cam$accl_temp==12 & cam$heart_mass!= "NA")
+cam12f <- subset(cam, cam$substrate=="FA" & cam$accl_temp==12 & cam$heart_mass!= "NA")
+cam12l <- subset(cam, cam$substrate=="LKA" & cam$accl_temp==12 & cam$heart_mass!= "NA")
+cam12i <- subset(cam, cam$substrate=="INH" & cam$accl_temp==12 & cam$heart_mass!= "NA")
+cam28g <- subset(cam, cam$substrate=="Glucose" & cam$accl_temp==28 & cam$heart_mass!= "NA" )
+cam28f <- subset(cam, cam$substrate=="FA" & cam$accl_temp==28 & cam$heart_mass!= "NA")
+cam28l <- subset(cam, cam$substrate=="LKA" & cam$accl_temp==28 & cam$heart_mass!= "NA")
+cam28i <- subset(cam, cam$substrate=="INH" & cam$accl_temp==28 & cam$heart_mass!= "NA")
+
+#retrieve the heart mass residuals from a linear model of heart mass ~ metabolic rate for each temp/sub combo
+cam12g$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam12g)$residuals
+cam12f$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam12f)$residuals
+cam12l$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam12l)$residuals
+cam12i$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam12i)$residuals
+cam28g$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam28g)$residuals
+cam28f$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam28f)$residuals
+cam28l$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam28l)$residuals
+cam28i$heart_residuals <- lm(MR_pmol_s ~ heart_mass, cam28i)$residuals 
+
+#regroup the subsetted dataframes
+cam <- rbind(cam12g, cam12f, cam12l, cam12i, cam28g, cam28f, cam28i, cam28l)
+```
+
+### Stats
+#### WAM
+```{r}
+#Relationship between mass and MO2 per temperature
+summary(lm(tenth_perc_MO2_mg_hr ~ mass, wam12)) #12
+summary(lm(tenth_perc_MO2_mg_hr ~ mass, wam28)) #28
+
+#linear model testing habitat temp by wam
+summary(lm(mass.residuals.bytemp ~ aug2018_temp, wam12)) #12
+summary(lm(mass.residuals.bytemp ~ aug2018_temp, wam28)) #28
+```
+#### CTmax
+```{r}
+#relationship between ctmax and mass per temperature
+summary(lm(CTmax~mass, ctmax12)) #12
+summary(lm(CTmax~mass, ctmax28)) #2
+
+#summary of linear model testing the relationship for 12 and 28 temps for ctmax
+summary(lm(mass.residuals.bytemp ~ aug2018_temp, ctmax12)) #12
+summary(lm(mass.residuals.bytemp ~ aug2018_temp, ctmax28))$coefficients[,4] #28
+
+```
+#### CaM
+```{r}
+#full model
+anova(aov(MR_pmol_s ~ accl_temp + substrate + heart_mass, cam))
+
+#relationship of mass and MR for each substrate/temp
+summary(lm(MR_pmol_s ~ heart_mass, cam12g))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam12f))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam12l))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam12i))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam28g))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam28f))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam28l))$coefficients[,4]
+summary(lm(MR_pmol_s ~ heart_mass, cam28i))$coefficients[,4]
+
+#run the linear model of heart_residuals x habitat temperature
+#remove comments to see just p-value
+summary(lm(heart_residuals ~ aug2018_temp, cam12g))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam12f))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam12l))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam12i))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam28g))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam28f))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam28l))#$coefficients[,4]
+summary(lm(heart_residuals ~ aug2018_temp, cam28i))#$coefficients[,4]
+```
+
+
+### Plot:WAM/CTmax ~ Habitat temp
+
+```{r}
+#create tables with labels for plot annotation
+f_labels1 <- data.frame(accl_temp = c("12", "28"), label = c("R2=0.00, p=0.848","R2=0.13, p<<0.001***"))
+
+#create summary table for wam to have mean and error
+library(plyr)
+wsum.se <- summarySE(wam, measurevar="mass.residuals.bytemp", groupvars=c("accl_temp","aug2018_temp"))
+
+#wam ggplot for habitat temp X wam for each temp
+p1 <- ggplot(wsum.se, aes(x=aug2018_temp, y=mn)) +
+  geom_smooth(data=subset(wam,wam$accl_temp==12), aes(x=aug2018_temp, y=mass.residuals.bytemp),method="lm", col="blue", lwd=1) +
+  geom_smooth(data=subset(wam,wam$accl_temp==28), aes(x=aug2018_temp, y=mass.residuals.bytemp),method="lm", col="red", lwd=1) +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp), width=0, lwd=0.75) +
+  geom_point(aes(col=aug2018_temp), size=3) +
+  theme_bw() + theme(legend.position = "none") +
+  facet_grid(.~accl_temp) +
+  scale_color_gradient(name="Temperature", low="blue", high="red") +
+  labs(x = "Habitat Temperature (°C)", y = "MO2 Mass Residuals") + 
+  geom_text(x = 15, y = -1.4, hjust=0,aes(label = label), data = f_labels1, size=6, col=c("black","red"))+
+  theme(axis.text = element_text(size = 20, colour="black"), 
+        axis.title = element_text(size = 25), 
+        strip.text.x = element_text(size = 20, color = "black"))
+
+p1
+
+#create summary table to make the mean/errobar valuess
+csum.se <- summarySE(ctmax, measurevar="mass.residuals.bytemp", groupvars=c("accl_temp","aug2018_temp"))
+
+#create tables with labels for plot annotation
+f_labels1 <- data.frame(accl_temp = c("12", "28"), label = c("R2=0.15, p<<0.001***","R2=0.38, p<<0.001***"))
+
+p2 <- ggplot(csum.se, aes(x=aug2018_temp, y=mn)) +
+  geom_smooth(data=subset(ctmax,ctmax$accl_temp==12), aes(x=aug2018_temp, y=mass.residuals.bytemp),method="lm", col="blue", lwd=1) +
+  geom_smooth(data=subset(ctmax,ctmax$accl_temp==28), aes(x=aug2018_temp, y=mass.residuals.bytemp),method="lm", col="red", lwd=1) +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp), width=0, lwd=0.75) +
+  geom_point(aes(col=aug2018_temp), size=3) +
+  theme_bw() + theme(legend.position = "none") +
+  facet_grid(.~accl_temp) +
+  scale_color_gradient(name="Temperature", low="blue", high="red") +
+  labs(x = "Habitat Temperature (°C)", y = "CTmax Mass Residuals") + 
+  geom_text(x = 15.5, y = 1, hjust=0,aes(label = label), data = f_labels1, size=6, col="red")+
+  theme(axis.text = element_text(size = 20, colour="black"), 
+        axis.title = element_text(size = 25), 
+        strip.text.x = element_text(size = 20, color = "black"))
+p2
+
+library(ggpubr)
+fp <- ggarrange(p1, p2, ncol = 1,nrow = 2, common.legend = FALSE) 
+fp
+
+ggsave("../Output/Fig3AB-habtempWAMCTmax.pdf",  width = 10,height = 10)
+
+
+```
+
+### Plot:CaM ~ habitat temp
+```{r}
+#make summary table of residuals for plotting
+sum.se <- summarySE(cam, measurevar="heart_residuals", groupvars=c("accl_temp","substrate", "aug2018_temp"))
+
+#create significance labels
+f_labels<-data.frame(
+    accl_temp=c("12","12","12","12","28","28","28","28"),
+    substrate=c("Glucose","FA", "LKA","INH", "Glucose","FA", "LKA", "INH"),
+    label=c("R2=0.04, p=0.00947**","R2=0.06, p=0.0026**", "R2=0.01, p=0.147","R2=0.03, p=0.0237*", "R2=0.03, p=0.04*", "R2=0.01, p=0.336", "R2=0.06, p=0.0029**", "R2=0.00, p=0.793"))
+f_labels$substrate <- factor(f_labels$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+
+#create correct labels for the facet headings
+substrate.labs <- c("Glucose", "FA", "LKA", "Endogenous")
+names(substrate.labs) <- c("Glucose", "FA", "LKA", "INH")
+
+#plotting each temp/sub combo using heart residuals against habitat temperature
+
+ggplot(sum.se, aes(x=aug2018_temp, y=mn, col=accl_temp)) +
+  geom_smooth(data=subset(cam, cam$accl_temp==12), aes(x=aug2018_temp, y=heart_residuals), col="blue",method="lm") + 
+  geom_smooth(data=subset(cam, cam$accl_temp==28), aes(x=aug2018_temp, y=heart_residuals), col="red",method="lm") +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp),width=0.5) + 
+  geom_point(aes(col=aug2018_temp),size=1.5) + 
+  scale_color_gradient(low="blue", high="red") + theme_bw() + 
+  theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y = "Cardiac MO2 Heart Mass Residuals") +
+  theme(axis.text = element_text(size = 18), axis.title = element_text(size = 25)) +
+  theme(axis.text = element_text(colour = "black")) +
+  theme(strip.text.x = element_text(size = 18, color = "black"),
+        strip.text.y = element_text(size = 15, color = "black")) +
+  facet_grid(substrate~accl_temp, labeller = labeller(substrate = substrate.labs)) +
+  geom_text(x = 15.5, y = 13, hjust=0,aes(label = label), data = f_labels, size=6, col=c("red","red","black","red", "red", "black","red", "black"))
+
+ggsave("../Output/Fig3C-habtempCaM.pdf", width = 8,height = 10)
+
+```
+
+
+##  Fig S3:
+### Stats and residuals calculation
+```{r}
+#start with clean df
+wam <- datwam
+
+library(MASS)
+#looking at other variables in the linear model including acclimation order, acclimation temp, mass, and sex
+#Find AIC model
+wam_aic <- wam %>% 
+  do(model=(stepAIC(lm(log10(tenth_perc_MO2_mg_hr) ~ accl_temp + accl_order + sex + log10(mass) + aug2018_temp, data=.), direction='both', scope = . ~ .^2)))
+#print model
+(wam_aic$model)
+#run anova table on the full model to see what is significant
+anova(lm(log10(tenth_perc_MO2_mg_hr) ~ accl_temp + accl_order + 
+    log10(mass) + aug2018_temp + accl_temp:accl_order + accl_temp:aug2018_temp + 
+    accl_order:aug2018_temp + log10(mass):aug2018_temp, data = wam))
+summary(lm(log10(tenth_perc_MO2_mg_hr) ~ accl_temp + accl_order + 
+    log10(mass) + aug2018_temp + accl_temp:accl_order + accl_temp:aug2018_temp + 
+    accl_order:aug2018_temp + log10(mass):aug2018_temp, data = wam))
+
+#based on numerous interactions, plot the data using mass residuals by temp and order
+
+#linear model to retrieve mass residuals
+wam$mass.residuals <- lm(log10(tenth_perc_MO2_mg_hr)~log10(mass), wam)$residuals
+
+#subset dataframe
+wam12 <- subset(wam, wam$accl_temp==12)
+wam28 <- subset(wam, wam$accl_temp==28)
+
+#testing these relationships using anovas
+#significant at 28 but not at 12
+anova(lm(mass.residuals~aug2018_temp, data=subset(wam12, wam12$accl_order=="12 to 28")))
+anova(lm(mass.residuals~aug2018_temp, data=subset(wam28, wam28$accl_order=="12 to 28")))
+anova(lm(mass.residuals~aug2018_temp, data=subset(wam12, wam12$accl_order=="28 to 12")))
+anova(lm(mass.residuals~aug2018_temp, data=subset(wam28, wam28$accl_order=="28 to 12")))
+```
+
+
+### Plot: WAM AIC
+
+```{r}
+#make a summary table
+library(plyr)
+sum.se <- summarySE(wam, measurevar="mass.residuals", groupvars=c("accl_order","accl_temp","aug2018_temp"))
+
+#data text label data
+f_labels1 <- data.frame(accl_order = c("12 to 28", "28 to 12"), 
+                        label = c("28°C: p<<0.001***","28°C: p<<0.001*** "))
+f_labels2 <- data.frame(accl_order = c("12 to 28", "28 to 12"), 
+                        label = c("12°C: p=0.841","12°C: p=0.662"))
+
+#plotting acclimation order and acclimation temp interaction for WAM
+ggplot(sum.se, aes(x=aug2018_temp, y=mn)) + 
+  geom_smooth(data=subset(wam, wam$accl_temp==12), aes(x=aug2018_temp, y=mass.residuals), col="blue",method="lm") + 
+  geom_smooth(data=subset(wam, wam$accl_temp==28), aes(x=aug2018_temp, y=mass.residuals), col="red",method="lm") +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp),width=0.5) + 
+  geom_point(aes(col=aug2018_temp), size=2) + 
+  scale_color_gradient(low="blue", high="red") + 
+  theme_bw() + theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y = "MO2 Mass Residuals") + 
+  facet_grid(.~accl_order) +
+  ggtitle("Acclimation Order") +
+  theme(axis.text = element_text(size = 20, colour = "black"), 
+        axis.title = element_text(size = 25),
+        strip.text.x = element_text(size = 20, color = "black"),
+        plot.title = element_text(size=25, hjust = 0.5)) +
+  geom_text(x = 31, y = 0.42, hjust=1,aes(label = label), data = f_labels1, size=6)+
+  geom_text(x = 31, y = 0.36, hjust=1,aes(label = label), data = f_labels2, size=6)
+  
+
+ggsave("../Output/FigS3-WAMAIC.pdf", width = 8,height = 5)
+
+```
+
+##  Fig S4:
+### Stats and calculate residuals
+
+```{r}
+#start with clean df
+ctmax <- datctmax
+
+library(MASS)
+#looking at other variables in the linear model including acclimation order, acclimation temperature, mass, and sex
+#Find AIC model
+ctmax_aic <- ctmax %>% 
+  do(model=(stepAIC(lm(CTmax ~ accl_temp + accl_order + sex + (mass) + aug2018_temp, data=.), direction='both', scope = . ~ .^2)))
+#print model
+ctmax_aic$model
+#run anova table on the full model to see what is significant
+anova(lm(CTmax ~ accl_temp + accl_order + sex + mass + aug2018_temp + 
+    accl_temp:accl_order + accl_temp:aug2018_temp + accl_order:aug2018_temp + 
+    accl_order:mass + accl_order:sex, data = ctmax))
+
+#based on numerous interactions, plot the data using mass residuals by temp and order
+
+#linear model to retrieve mass residuals
+ctmax$aic.residuals <- lm(CTmax~ sex + mass + accl_order:mass + accl_order:sex, ctmax)$residuals
+
+#subset dataframe
+ctmax12 <- subset(ctmax, ctmax$accl_temp==12)
+ctmax28 <- subset(ctmax, ctmax$accl_temp==28)
+
+#testing these relationships using anovas
+#significant at 28 but not at 12
+summary(lm(aic.residuals~aug2018_temp, data=subset(ctmax12, ctmax12$accl_order=="12 to 28")))$coefficients[,4]
+anova(lm(aic.residuals~aug2018_temp, data=subset(ctmax28, ctmax28$accl_order=="12 to 28")))
+anova(lm(aic.residuals~aug2018_temp, data=subset(ctmax12, ctmax12$accl_order=="28 to 12")))
+anova(lm(aic.residuals~aug2018_temp, data=subset(ctmax28, ctmax28$accl_order=="28 to 12")))
+
+```
+
+### CTmax AIC plot
+```{r}
+
+#make a summary table
+sum.se <- summarySE(ctmax, measurevar="aic.residuals", groupvars=c("accl_order","accl_temp","aug2018_temp"))
+
+#data text label data
+f_labels1 <- data.frame(accl_order = c("12 to 28", "28 to 12"), 
+                        label = c("28°C: p<<0.001*** ","28°C: p<<0.001***"))
+f_labels2 <- data.frame(accl_order = c("12 to 28", "28 to 12"), 
+                        label = c("12°C: p<<0.001***","12°C: p<<0.001*** "))
+
+#plotting acclimation order and acclimation temp interaction for CTmax
+ggplot(sum.se, aes(x=aug2018_temp, y=mn)) + 
+  geom_smooth(data=subset(ctmax, ctmax$accl_temp==12), aes(x=aug2018_temp, y=aic.residuals), col="blue",method="lm") + 
+  geom_smooth(data=subset(ctmax, ctmax$accl_temp==28), aes(x=aug2018_temp, y=aic.residuals), col="red",method="lm") +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp),width=0.5) + 
+  geom_point(aes(col=aug2018_temp), size=1) + 
+  scale_color_gradient(low="blue", high="red") + 
+  theme_bw() + theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y = "CTmax AIC Residuals") + 
+  facet_grid(.~accl_order) +
+  ggtitle("Acclimation Order") +
+  theme(axis.text = element_text(size = 20, colour = "black"), 
+        axis.title = element_text(size = 25),
+        strip.text.x = element_text(size = 20, color = "black"),
+        plot.title = element_text(size=25, hjust = 0.5)) +
+  geom_text(x = 15, y = 4, hjust=0,aes(label = label), data = f_labels1, size=6)+
+  geom_text(x = 31, y = -5, hjust=1,aes(label = label), data = f_labels2, size=6)
+
+ggsave("../Output/FigS4-CTmaxAIC.pdf", width = 8,height = 5)
+```
+
+
+##  Fig S5:
+### Calculate residuals
+Residuals calculated by body mass, calcualted by temp and substrate
+```{r}
+#load clean df
+cam <- datcam
+
+#calculate the mass residuals for each temp/substrate combination by heart mass
+#subsetting the data by temp and substrate
+cam12g <- subset(cam, cam$substrate=="Glucose" & cam$accl_temp==12 )
+cam12f <- subset(cam, cam$substrate=="FA" & cam$accl_temp==12 )
+cam12l <- subset(cam, cam$substrate=="LKA" & cam$accl_temp==12 )
+cam12i <- subset(cam, cam$substrate=="INH" & cam$accl_temp==12 )
+cam28g <- subset(cam, cam$substrate=="Glucose" & cam$accl_temp==28  )
+cam28f <- subset(cam, cam$substrate=="FA" & cam$accl_temp==28 )
+cam28l <- subset(cam, cam$substrate=="LKA" & cam$accl_temp==28 )
+cam28i <- subset(cam, cam$substrate=="INH" & cam$accl_temp==28 )
+
+#retrieve the heart mass residuals from a linear model of heart mass ~ metabolic rate for each temp/sub combo
+cam12g$residuals <- lm(MR_pmol_s ~ mass, cam12g)$residuals
+cam12f$residuals <- lm(MR_pmol_s ~ mass, cam12f)$residuals
+cam12l$residuals <- lm(MR_pmol_s ~ mass, cam12l)$residuals
+cam12i$residuals <- lm(MR_pmol_s ~ mass, cam12i)$residuals
+cam28g$residuals <- lm(MR_pmol_s ~ mass, cam28g)$residuals
+cam28f$residuals <- lm(MR_pmol_s ~ mass, cam28f)$residuals
+cam28l$residuals <- lm(MR_pmol_s ~ mass, cam28l)$residuals
+cam28i$residuals <- lm(MR_pmol_s ~ mass, cam28i)$residuals
+
+#regroup the subsetted dataframes
+cam <- rbind(cam12g, cam12f, cam12l, cam12i, cam28g, cam28f, cam28i, cam28l)
+```
+
+### Stats
+```{r}
+#full model
+anova(aov(MR_pmol_s ~ accl_temp + substrate + mass, cam))
+
+#relationship of mass and MR for each substrate/temp
+summary(lm(MR_pmol_s ~ mass, cam12g))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam12f))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam12l))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam12i))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam28g))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam28f))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam28l))$coefficients[,4]
+summary(lm(MR_pmol_s ~ mass, cam28i))
+
+#run the linear model of residuals x habitat temperature
+summary(lm(residuals ~ aug2018_temp, cam12g))
+summary(lm(residuals ~ aug2018_temp, cam12f))
+summary(lm(residuals ~ aug2018_temp, cam12l))
+summary(lm(residuals ~ aug2018_temp, cam12i))
+summary(lm(residuals ~ aug2018_temp, cam28g))
+summary(lm(residuals ~ aug2018_temp, cam28f))
+summary(lm(residuals ~ aug2018_temp, cam28l))
+summary(lm(residuals ~ aug2018_temp, cam28i))
+```
+
+
+### CaM habitat body mass residuals plot
+
+```{r}
+#make summary table of residuals for plotting
+sum.se <- summarySE(cam, measurevar="residuals", groupvars=c("accl_temp","substrate", "aug2018_temp"))
+
+#create significance labels
+f_labels<-data.frame(
+    accl_temp=c("12","12","12","12","28","28","28","28"),
+    substrate=c("Glucose","FA", "LKA","INH", "Glucose","FA", "LKA", "INH"),
+    label=c("p=0.131", "p=0.087","p=0.468", "p=0.368", "p=0.304", "p=0.702", "p=0.096","p=0.305"))
+f_labels$substrate <- factor(f_labels$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+
+#create correct labels for the facet headings
+substrate.labs <- c("Glucose", "FA", "LKA", "Endogenous")
+names(substrate.labs) <- c("Glucose", "FA", "LKA", "INH")
+
+#plotting each temp/sub combo using body mass residuals against habitat temperature
+ggplot(sum.se, aes(x=aug2018_temp, y=mn, col=accl_temp)) +
+  geom_smooth(data=subset(cam, cam$accl_temp==12), aes(x=aug2018_temp, y=residuals), col="blue",method="lm") + 
+  geom_smooth(data=subset(cam, cam$accl_temp==28), aes(x=aug2018_temp, y=residuals), col="red",method="lm") +
+  geom_errorbar(aes(ymin=mn-ste, ymax=mn+ste, col=aug2018_temp),width=0.5) + 
+  geom_point(aes(col=aug2018_temp),size=1.5) + 
+  scale_color_gradient(low="blue", high="red") + theme_bw() + 
+  theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y = "Cardiac MO2 Body Mass Residuals") +
+  theme(axis.text = element_text(size = 18), axis.title = element_text(size = 25)) +
+  theme(axis.text = element_text(colour = "black")) +
+  theme(strip.text.x = element_text(size = 18, color = "black"),
+        strip.text.y = element_text(size = 15, color = "black")) +
+  facet_grid(substrate~accl_temp, labeller = labeller(substrate = substrate.labs)) +
+  geom_text(x = 15.5, y = 9.5, hjust=0,aes(label = label), data = f_labels, size=6, col="black")
+
+ggsave("../Output/FigS5-habtempCaMBodymass.pdf", width = 8,height = 10)
+```
+
+# 4 Inter and Intra population variation in thermal sensitivity
+```{r}
+#remove excess variables
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax", "wam_all")])
+
+#If needed detach plyr  packages loaded because the order loaded interferes with the rename command
+detach(package:plyr)
+
+```
+## Create a wide dataframe to examine trait plasticity
+
+Creating a wide data frame and calculating the residuals across temperatures
+After calculating the residuals we transform the data back into trait units
+To do so we extract the slope (m) and intercept (b) from the model
+Calculate the MO2 (y) constant based on an average size fish
+Add the constant to the residuals from the data
+```{r}
+#start with clean df
+wam <- datwam
+ctmax <- datctmax
+
+library(dplyr)
+#rename a few variable to make wide df
+wam_wide <- wam %>% 
+                rename(c(
+                  "wam_temp" = "accl_temp",
+                  "wam_mass" = "mass",
+                  "wam_length" = "length",
+                  "wam_date" = "Date"
+                  )) %>% dplyr::select(-phenotype, -Temp)
+#reshape wam file to wide by acclimation temp
+wam_wide <- reshape(wam_wide, idvar = "FishID", timevar = "wam_temp",v.names = c("wam_date","wam_length","wam_mass","tenth_perc_MO2_mg_hr_kg", "tenth_perc_MO2_mg_hr", "wam.residuals", "wam.corr"), direction = "wide")
+
+
+#rename a few variables 
+ctmax_wide <- ctmax %>% 
+                rename(c(
+                 "ctmax_temp" = "accl_temp",
+                  "ctmax_mass" = "mass",
+                  "ctmax_length" = "length",
+                  "ctmax_date" = "Date"
+                  )) %>% dplyr::select(-phenotype, -Temp)
+#reshape ctmax to wide
+ctmax_wide <- reshape(ctmax_wide, idvar = "FishID", timevar = "ctmax_temp",v.names = c("ctmax_date","ctmax_length","ctmax_mass","CTmax", "ctmax.residuals", "ctmax.corr"), direction = "wide")
+
+#join ctmax and wam data frames into a single df
+widedat <- full_join(wam_wide, ctmax_wide, by=c( "FishID", "pop", "sex", "pair", "state", "mt_haplotype", "temp_var", "latitude", "accl_order", "aug2018_temp", "tenyr_mean_temp"))
+
+```
+
+
+### Mass corrected Q10 figure
+
+
+## Fig 4
+## Calculate Q10 WAM/CTmax
+```{r}
+#using widedat dataframe generated above
+
+#calculate Q10 as (trait28/trait12)^(10/(28-12)) for CTmax and WAM and add to widedat df
+widedat$wam_corrQ10 <- (widedat$wam.corr.28/widedat$wam.corr.12)^(10/(28-12))
+widedat$ctmax_corrQ10 <- (widedat$ctmax.corr.28/widedat$ctmax.corr.12)^(10/(28-12))
+```
+
+### Stats
+```{r}
+
+#Examining wam Q10 as a function of metabolic rate
+#does the trait per temperature explain Q10
+summary(lm(wam.corr.12~wam_corrQ10, widedat))$coefficients[,4]
+summary(lm(wam.corr.28~wam_corrQ10, widedat))$coefficients[,4]
+
+
+#mean Q10for WAM
+summary(widedat$wam_corrQ10)
+
+#Examining ctmax Q10 as a function of ctmax 
+#does the trait per temperature explain Q10
+summary(lm(ctmax.corr.12~ctmax_corrQ10, widedat))$coefficients[,4]
+summary(lm(ctmax.corr.28~ctmax_corrQ10, widedat))$coefficients[,4]
+
+#mean Q10for CTmax
+summary(widedat$ctmax_corrQ10)
+
+#looking at Q10 in CTmax and WAM by habitat temperature
+
+#linear regression of wam Q10 by habitat temperature
+summary(lm(wam_corrQ10~aug2018_temp, widedat))
+
+# ctmax
+#linear regression of wam Q10 by habitat temperatusre
+summary(lm(ctmax_corrQ10~aug2018_temp, widedat))
+```
+
+### Plot: Q10 WAM and CTmax
+```{r}
+#using Q10 as calculated in above chunk: 
+#calculate Q10 as (trait28/trait12)^(10/(28-12)) for CTmax and WAM and add to widedat df
+
+#plotting the Q10 x WAM
+p1 <- ggplot(widedat) + 
+  geom_point(aes(x=wam_corrQ10, y=wam.corr.28),col="red") +
+  geom_smooth(aes(x=wam_corrQ10, y=wam.corr.28),method="lm",col="red") + 
+  geom_point(aes(x=wam_corrQ10, y=wam.corr.12),col="blue") + 
+  geom_smooth(aes(x=wam_corrQ10,y=wam.corr.12),method="lm",col="blue" ) +
+  theme_bw() +
+  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 25)) +
+  theme(axis.text = element_text(colour = "black")) +
+  labs(y = "WAM Q10", x ="MO2 (mg O2*hr-1)") + 
+  annotate("text", x = 0.75, y = 9.5, hjust = 0,label = "12°C: R2=0.45, p=<<0.001***", size=5)  +
+  annotate("text", x = 0.75, y = 10.2, hjust = 0,label = "28°C: R2=0.34, p=<<0.001***", size=5)
+p1
+
+#plotting the Q10 X ctmax
+p2 <- ggplot(widedat) + 
+  geom_point(aes(x=ctmax_corrQ10, y=ctmax.corr.28),col="red") + 
+  geom_smooth(aes(x=ctmax_corrQ10, y=ctmax.corr.28),method="lm",col="red") + 
+  geom_point(aes(x=ctmax_corrQ10, y= ctmax.corr.12),col="blue") + 
+  geom_smooth(aes(x=ctmax_corrQ10, y=ctmax.corr.12),method="lm",col="blue" ) +
+  theme_bw() +
+  theme(axis.text = element_text(size = 20,colour="black"), 
+        axis.title = element_text(size = 25)) +
+  labs(y = "CTmax Q10", x ="CTmax (°C)")  + 
+  annotate("text", x = 1.06, y = 31.2, hjust=0,label = "12°C: R2=0.87, p<<0.001***", size=5)  +
+  annotate("text", x = 1.06, y = 30.5, hjust=0,label = "28°C: R2=0.00, p=0.878", size=5)
+
+p2
+
+library(plyr)
+#create summary table for plotting
+sum.se <- summarySE(subset(widedat, widedat$wam_corrQ10!="NA"), measurevar="wam_corrQ10", groupvars=c("aug2018_temp", "pop", "state"))
+
+#plotting WAM Q10 by habitat temperature
+p3 <- ggplot(sum.se, aes(x=aug2018_temp, y=mn)) + 
+  geom_smooth(data=widedat,aes(x=aug2018_temp, y=wam_corrQ10), method="lm", col="black") +
+  geom_point(aes(col=aug2018_temp), size=4) + 
+  geom_errorbar(aes(x=aug2018_temp, ymin=mn-ste, ymax=mn+ste, col=aug2018_temp), width=1, lwd=1)  + 
+  theme_bw() + theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y ="WAM Q10")  +
+  annotate("text", x = 25, y = 2.3, hjust=0,label = "R2=0.02, p=0.040*", size=5) +
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red") + 
+  theme(axis.text = element_text(size = 20, colour = "black"), 
+        axis.title = element_text(size = 25)) 
+p3
+
+#create summary table for plotting
+sum.se <- summarySE(subset(widedat, widedat$ctmax_corrQ10!="NA"), measurevar="ctmax_corrQ10", groupvars=c("aug2018_temp", "pop", "state"))
+
+#plotting CTmax Q10 by habitat temperature
+p4 <- ggplot(sum.se, aes(x=aug2018_temp, y=mn)) + 
+  geom_smooth(data=widedat,aes( x=aug2018_temp, y=ctmax_corrQ10), method="lm", col="black") +
+  geom_point(aes(col=aug2018_temp), size=4) + 
+  geom_errorbar(aes(x=aug2018_temp, ymin=mn-ste, ymax=mn+ste, col=aug2018_temp), width=1, lwd=1)  + 
+  theme_bw() + theme(legend.position = "none") +
+  labs(x = "Habitat Temperature (°C)", y ="CTmax Q10")  +
+  annotate("text", x = 24, y = 1.125, hjust=0,label = "R2=0.05, p=0.000119***", size=5) +
+  theme(axis.text = element_text(size = 20, colour ="black"), axis.title = element_text(size = 25)) +
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red")
+p4
+
+#final plot arrangement
+fp <- ggarrange(p1,p2,p3,p4, ncol=2, nrow=2) 
+fp
+ggsave("../Output/Fig4-Q10.pdf", height = 10, width=10)
+```
+
+
+## Fig S6
+### Stats
+```{r}
+#summary statistics of Q10 data for WAM and CTmax
+summary(widedat$wam_corrQ10)
+summary(widedat$ctmax_corrQ10)
+
+#test regresssion for plasticity as the Q10
+summary(lm((wam_corrQ10)~(ctmax_corrQ10), widedat))
+
+```
+### Plot: Q10 CTmax vs WAM
+```{r}
+library(ggplot2)
+
+#Q10 in WAM vs CTmax
+#Q10 plot comparing wam and ctmax
+ggplot(widedat) + 
+  geom_point(aes(wam_corrQ10, ctmax_corrQ10)) + 
+  geom_smooth(aes(wam_corrQ10, ctmax_corrQ10), method="lm") +
+  theme_bw() +
+  labs(x = "WAM Mass Corrected Q10", y ="CTmax Mass Corrected Q10") +
+  annotate("text", x = 4.7, y = 1.20, label = "R2 = 0.06, p=0.001845**", size=5) + 
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 20)) +
+  theme(axis.text = element_text(colour = "black")) 
+ggsave("../Output/FigS6-Q10corrWAMCTmax.pdf", height=6, width=10)
+
+```
+
+
+## Fig S7:
+### CaM Q10 Create Widedata frame
+```{r}
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax")])
+
+#reload df
+cam <- datcam
+
+detach(package:plyr)
+#rename a few columns in cam data set
+cam_wide <- cam %>% 
+                rename(c(
+                  "cam_temp" = "accl_temp",
+                  "cam_mass" = "mass",
+                  "cam_length" = "length",
+                  "cam_date" = "Date"
+                  )) %>% dplyr::select(-phenotype, -Temp)
+#reshape cam to wide by the acclimation temp column for cam data set
+cam_wide <- reshape(cam_wide, 
+                    idvar = c("FishID", "substrate"), 
+                    timevar = c("cam_temp"),
+                    v.names =c( "MR_pmol_s", "cam.corr", "cam.residuals"), direction = "wide")
+# further reshape to fully wide by the substrates, so each temp x sub combo have a column
+cam_wide <- reshape(cam_wide, 
+                    idvar = "FishID", 
+                    timevar = "substrate",
+                    v.names = c("MR_pmol_s.12","cam.residuals.12", "cam.corr.12", "MR_pmol_s.28", "cam.residuals.28", "cam.corr.28"), direction = "wide")
+
+#calculate the mean metabolic rate per substrate, per temp, per pop and make a table
+m <- cam %>% group_by(substrate, accl_temp, aug2018_temp, pop) %>% do(mn = mean(.$MR_pmol_s))
+library(tidyverse)
+#create a widedata frame by acclimation temp
+m <- spread(m, key = (accl_temp), value = mn)
+
+#rename columns because working with numbers is complicated
+m <- m %>% 
+  rename(c( "T12" = "12","T28" = "28")) 
+
+#make numeric variables
+m$T12 <- as.numeric(m$T12)
+m$T28<- as.numeric(m$T28)
+```
+
+### Calculate CaM Q10 Estimate
+```{r}
+#calculate the Q10 in cam as the mean28/mean12 ^ (10/16)
+q10m <- m %>% group_by(substrate, aug2018_temp, pop) %>% do(Q10 = (.$T28/.$T12)^(10/16)) 
+q10m$Q10<- as.numeric(q10m$Q10)
+
+#### Calculate the overall mean Q10 per substrate
+#calculate the Q10 in cam as the mean28/mean12 ^ (10/16)
+q10sub <- cam %>% group_by(substrate, accl_temp) %>% do(mn = mean(.$cam.corr))
+#create a widedata frame by acclimation temp
+q10sub <- spread(q10sub, key = (accl_temp), value = mn)
+
+#rename columns because working with numbers is complicated
+q10sub <- q10sub %>% 
+  rename(c( "T12" = "12","T28" = "28")) 
+#make numeric variables
+q10sub$T12 <- as.numeric(q10sub$T12)
+q10sub$T28<- as.numeric(q10sub$T28)
+q10m2 <- q10sub %>% group_by(substrate) %>% do(Q10 = (.$T28/.$T12)^(10/16)) 
+```
+
+### Stats
+```{r}
+#check the significance of each line
+summary(lm(Q10~aug2018_temp, subset(q10m, q10m$substrate=="Glucose")))
+summary(lm(Q10~aug2018_temp, subset(q10m, q10m$substrate=="FA")))
+summary(lm(Q10~aug2018_temp, subset(q10m, q10m$substrate=="LKA")))
+summary(lm(Q10~aug2018_temp, subset(q10m, q10m$substrate=="INH")))
+```
+
+### Plot: Q10 CaM 
+
+```{r}
+#rename the panels for substrate by creating list to add to plot
+substrate.labs <- c("Glucose", "FA", "LKA", "Endogenous")
+names(substrate.labs) <- c("Glucose", "FA", "LKA", "INH")
+
+#create pvalue labels for the facets
+f_labels<-data.frame(
+    substrate=c("Glucose","FA", "LKA","INH"),
+    label=c("p=0.089","p=0.013*", "p=0.020*","p=0.138"))
+f_labels$substrate <- factor(f_labels$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+
+#plot the Q10 by habitat temperature
+ggplot(q10m, aes(x=aug2018_temp, y=Q10)) + 
+   geom_smooth(method="lm",col="black")  + 
+  geom_point(aes(col=aug2018_temp), size=3) +
+  theme_bw() + theme(legend.position = "none") +
+  facet_wrap(~substrate, labeller = labeller(substrate=substrate.labs)) + 
+  scale_colour_gradient(name= "Temperature",low="blue", high = "red") +
+  labs(x = "Habitat Temperature (°C)", y = "Cardiac Mass Corrected Q10") +
+  theme(axis.text = element_text(size = 20, colour="black"), 
+        axis.title = element_text(size = 25),
+        strip.text.x = element_text(size = 15, color = "black")) +
+  geom_text(x = 15.5, y = 0.9, hjust=0,aes(label = label), data = f_labels, size=5, col="black")
+
+
+ggsave("../Output/FigS7-CaMQ10.pdf", height=8, width=10)
+
+```
+
+
+
+# 5 Correlations Among Traits
+## Calculate Residuals
+```{r}
+#remove excess variables
+rm(list=ls()[! ls() %in% c("summarySE","datwam", "datcam", "datctmax")])
+
+#clean df
+wam <- datwam
+ctmax <- datctmax
+cam<- datcam
+
+#####to calculate Mass Residuals
+
+#subset by temp for wam data
+wam12 <- subset(wam, wam$accl_temp==12)
+wam28 <- subset(wam, wam$accl_temp==28)
+#calculate mass residuals
+wam12$wam.mass.residuals.bytemp <- lm(log10(tenth_perc_MO2_mg_hr)~log10(mass), wam12)$residuals
+wam28$wam.mass.residuals.bytemp <- lm(log10(tenth_perc_MO2_mg_hr)~log10(mass), wam28)$residuals
+library(dplyr)
+#rejoin dfs
+wam <- full_join(wam12, wam28)
+
+#subset by temp for Ctmax data
+ctmax12 <- subset(ctmax, ctmax$Temp==12)
+ctmax28 <- subset(ctmax, ctmax$Temp==28)
+#calculate mass residuals by temp
+ctmax12$ctmax.mass.residuals.bytemp <- lm(CTmax ~ mass, ctmax12)$residuals
+ctmax28$ctmax.mass.residuals.bytemp <- lm(CTmax ~ mass, ctmax28)$residuals
+#rejoin df
+ctmax <- full_join(ctmax12, ctmax28)
+
+#for cam also need heart mass residuals
+#remove individuals without heart mass
+library(tidyr)
+cam <- cam %>% drop_na(heart_mass)
+
+#suset into temp and substrate
+camg12 <- subset(cam, cam$substrate=="Glucose" & cam$Temp==12)
+camg28 <- subset(cam, cam$substrate=="Glucose" & cam$Temp==28)
+camf12 <- subset(cam, cam$substrate=="FA" & cam$Temp==12)
+camf28 <- subset(cam, cam$substrate=="FA" & cam$Temp==28)
+caml12 <- subset(cam, cam$substrate=="LKA" & cam$Temp==12)
+caml28 <- subset(cam, cam$substrate=="LKA"& cam$Temp==28)
+cami12 <- subset(cam, cam$substrate=="INH" & cam$Temp==12)
+cami28 <- subset(cam, cam$substrate=="INH" & cam$Temp==28)
+#residuals
+camg12$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, camg12)$residuals
+camf12$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, camf12)$residuals
+caml12$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, caml12)$residuals
+cami12$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, cami12)$residuals
+camg28$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, camg28)$residuals
+camf28$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, camf28)$residuals
+caml28$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, caml28)$residuals
+cami28$cam.heart.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass, cami28)$residuals
+#rejoin to one df
+camg <- full_join(camg12, camg28)
+camf <- full_join(camf12, camf28)
+caml <- full_join(caml12, caml28)
+cami <- full_join(cami12, cami28)
+cam <- full_join(camg, camf)
+cam <- full_join(cam, caml)
+cam <- full_join(cami, cam)
+
+###### To calculate residuals to include habitat temp
+
+#subset by temp for wam
+wam12 <- subset(wam, wam$accl_temp==12)
+wam28 <- subset(wam, wam$accl_temp==28)
+#calculate residuals including mass and habitat temp
+wam12$wam.ht.residuals.bytemp <- 
+  lm(log10(tenth_perc_MO2_mg_hr)~log10(mass) + aug2018_temp, wam12)$residuals
+wam28$wam.ht.residuals.bytemp <- 
+  lm(log10(tenth_perc_MO2_mg_hr)~log10(mass) + aug2018_temp, wam28)$residuals
+#rejoin df
+wam <- full_join(wam12, wam28)
+
+#subset by temp for ctmax
+ctmax12 <- subset(ctmax, ctmax$Temp==12)
+ctmax28 <- subset(ctmax, ctmax$Temp==28)
+#calculate residuals including mass and habitat temp
+ctmax12$ctmax.ht.residuals.bytemp <- lm(CTmax ~ mass+ aug2018_temp, ctmax12)$residuals
+ctmax28$ctmax.ht.residuals.bytemp <- lm(CTmax ~ mass+ aug2018_temp, ctmax28)$residuals
+#rejoin df
+ctmax <- full_join(ctmax12, ctmax28)
+
+#seperate into seperate df for cam by temp and substrate
+camg12 <- subset(cam, cam$substrate=="Glucose" & cam$Temp==12)
+camg28 <- subset(cam, cam$substrate=="Glucose" & cam$Temp==28)
+camf12 <- subset(cam, cam$substrate=="FA" & cam$Temp==12)
+camf28 <- subset(cam, cam$substrate=="FA" & cam$Temp==28)
+caml12 <- subset(cam, cam$substrate=="LKA" & cam$Temp==12)
+caml28 <- subset(cam, cam$substrate=="LKA"& cam$Temp==28)
+cami12 <- subset(cam, cam$substrate=="INH" & cam$Temp==12)
+cami28 <- subset(cam, cam$substrate=="INH" & cam$Temp==28)
+#retrieve residuals including mass and habitat temp
+camg12$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, camg12)$residuals
+camf12$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, camf12)$residuals
+caml12$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, caml12)$residuals
+cami12$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, cami12)$residuals
+camg28$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, camg28)$residuals
+camf28$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, camf28)$residuals
+caml28$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, caml28)$residuals
+cami28$cam.heart.ht.residuals.bytempsub <- lm(MR_pmol_s ~ heart_mass+ aug2018_temp, cami28)$residuals
+#rejoin to one df
+camg <- full_join(camg12, camg28)
+camf <- full_join(camf12, camf28)
+caml <- full_join(caml12, caml28)
+cami <- full_join(cami12, cami28)
+cam <- full_join(camg, camf)
+cam <- full_join(cam, caml)
+cam <- full_join(cami, cam)
+
+```
+## Prepare wide data frame
+```{r}
+#detach interferring package
+#detach(package:plyr)
+#reload needed library
+library(dplyr)
+
+#rename a few columns to convert to wide in wam datasest
+wam_wide <- wam %>% 
+                rename(c(
+                  "wam_temp" = "accl_temp",
+                  "wam_mass" = "mass",
+                  "wam_length" = "length",
+                  "wam_date" = "Date"
+                  )) %>% dplyr::select(-phenotype, -Temp)
+#reshape wam data to wide data frame by the acclimation temperature 
+wam_wide <- reshape(wam_wide, idvar = "FishID", timevar = "wam_temp",v.names = c("wam_date","wam_length","wam_mass","tenth_perc_MO2_mg_hr_kg", "tenth_perc_MO2_mg_hr", "wam.mass.residuals.bytemp", "wam.ht.residuals.bytemp"), direction = "wide")
+
+#rename a few columns in ctmax dataset
+ctmax_wide <- ctmax %>% 
+                rename(c(
+                 "ctmax_temp" = "accl_temp",
+                  "ctmax_mass" = "mass",
+                  "ctmax_length" = "length",
+                  "ctmax_date" = "Date"
+                  )) %>% dplyr::select(-phenotype,  -Temp)
+#reshape ctmax data to wide format by acclimation temperature
+ctmax_wide <- reshape(ctmax_wide, idvar = "FishID", timevar = "ctmax_temp",v.names = c("ctmax_date","ctmax_length","ctmax_mass","CTmax", "ctmax.mass.residuals.bytemp", "ctmax.ht.residuals.bytemp"), direction = "wide")
+
+#rename a few columns in cam data set
+cam_wide <- cam %>% 
+                rename(c(
+                  "cam_temp" = "accl_temp",
+                  "cam_mass" = "mass",
+                  "cam_length" = "length",
+                  "cam_date" = "Date"
+                  )) %>% dplyr::select(-phenotype,  -Temp)
+#reshape cam to wide by the acclimation temp column for cam data set
+cam_wide <- reshape(cam_wide, 
+                    idvar = c("FishID", "substrate"), 
+                    timevar = c("cam_temp"),
+                    v.names =c( "MR_pmol_s",
+                              "cam.heart.residuals.bytempsub",
+                                "cam.heart.ht.residuals.bytempsub"), direction = "wide")
+# further reshape to fully wide by the substrates, so each temp x sub combo have a column
+cam_wide <- reshape(cam_wide, 
+                    idvar = "FishID", 
+                    timevar = "substrate",
+                    v.names = c("MR_pmol_s.12",
+                              "cam.heart.residuals.bytempsub.12",
+                                "cam.heart.ht.residuals.bytempsub.12","MR_pmol_s.28",
+                              "cam.heart.residuals.bytempsub.28",
+                                "cam.heart.ht.residuals.bytempsub.28"), direction = "wide")
+#merge the three datasets together
+widedat <- full_join(wam_wide, ctmax_wide, by=c( "FishID", "pop", "sex", "pair", "state", "mt_haplotype", "temp_var", "latitude", "accl_order", "aug2018_temp", "tenyr_mean_temp"))
+widedat <- full_join(widedat, cam_wide, by=c( "FishID", "pop", "sex", "pair", "state", "mt_haplotype", "temp_var", "latitude", "accl_order", "aug2018_temp", "tenyr_mean_temp"))
+
+
+### subsetting the data so you just have the trait values without meta data
+#using by temp and by sub for cam with heart residuals
+#for 12°C using mass resid and heart mass resid
+heart12 <- widedat[,c("wam.mass.residuals.bytemp.12", "ctmax.mass.residuals.bytemp.12", 
+                    "cam.heart.residuals.bytempsub.12.Glucose", "cam.heart.residuals.bytempsub.12.FA", 
+                    "cam.heart.residuals.bytempsub.12.LKA", "cam.heart.residuals.bytempsub.12.INH")]
+#rename a few columns to make it easier
+heart12 <- 
+  heart12 %>% rename(
+    "WAM" = "wam.mass.residuals.bytemp.12", 
+    "CTmax" = "ctmax.mass.residuals.bytemp.12",
+    "CaM Glucose" = "cam.heart.residuals.bytempsub.12.Glucose", 
+    "CaM FA" = "cam.heart.residuals.bytempsub.12.FA",
+    "CaM LKA" = "cam.heart.residuals.bytempsub.12.LKA", 
+    "CaM Endog" = "cam.heart.residuals.bytempsub.12.INH"
+  )
+#subset the data into the trait columns at 28 using mass resid and heart mass resid
+heart28 <- widedat[,c("wam.mass.residuals.bytemp.28", "ctmax.mass.residuals.bytemp.28", 
+                    "cam.heart.residuals.bytempsub.28.Glucose", "cam.heart.residuals.bytempsub.28.FA", 
+                    "cam.heart.residuals.bytempsub.28.LKA", "cam.heart.residuals.bytempsub.28.INH")]
+#rename a few columns to make it easier
+heart28 <- 
+  heart28 %>% rename(
+    "WAM" = "wam.mass.residuals.bytemp.28", 
+    "CTmax" = "ctmax.mass.residuals.bytemp.28",
+    "CaM Glucose" = "cam.heart.residuals.bytempsub.28.Glucose", 
+    "CaM FA" = "cam.heart.residuals.bytempsub.28.FA",
+    "CaM LKA" = "cam.heart.residuals.bytempsub.28.LKA", 
+    "CaM Endog" = "cam.heart.residuals.bytempsub.28.INH"
+  )
+### subsetting the data so you just have the trait values without meta data
+#using by temp and by sub for cam with heart residuals 
+
+#for 12°C data set with heart data by habitat temp
+heart12.ht <- widedat[,c("wam.ht.residuals.bytemp.12", "ctmax.ht.residuals.bytemp.12", 
+                    "cam.heart.ht.residuals.bytempsub.12.Glucose", "cam.heart.ht.residuals.bytempsub.12.FA", 
+                    "cam.heart.ht.residuals.bytempsub.12.LKA", "cam.heart.ht.residuals.bytempsub.12.INH")]
+#rename a few columns to make it easier
+heart12.ht <- 
+  heart12.ht %>% rename(
+    "WAM" = "wam.ht.residuals.bytemp.12", 
+    "CTmax" = "ctmax.ht.residuals.bytemp.12",
+    "CaM Glucose" = "cam.heart.ht.residuals.bytempsub.12.Glucose", 
+    "CaM FA" = "cam.heart.ht.residuals.bytempsub.12.FA",
+    "CaM LKA" = "cam.heart.ht.residuals.bytempsub.12.LKA", 
+    "CaM Endog" = "cam.heart.ht.residuals.bytempsub.12.INH"
+  )
+
+#for 28°C by habitat temp with heart residuals for cam
+heart28.ht <- widedat[,c("wam.ht.residuals.bytemp.28", "ctmax.ht.residuals.bytemp.28", 
+                    "cam.heart.ht.residuals.bytempsub.28.Glucose", "cam.heart.ht.residuals.bytempsub.28.FA", 
+                    "cam.heart.ht.residuals.bytempsub.28.LKA", "cam.heart.ht.residuals.bytempsub.28.INH")]
+heart28.ht <- 
+  heart28.ht %>% rename(
+    "WAM" = "wam.ht.residuals.bytemp.28", 
+    "CTmax" = "ctmax.ht.residuals.bytemp.28",
+    "CaM Glucose" = "cam.heart.ht.residuals.bytempsub.28.Glucose", 
+    "CaM FA" = "cam.heart.ht.residuals.bytempsub.28.FA",
+    "CaM LKA" = "cam.heart.ht.residuals.bytempsub.28.LKA", 
+    "CaM Endog" = "cam.heart.ht.residuals.bytempsub.28.INH"
+  )
+
+```
+
+## Fig S8:
+### Plot: partial correlation
+
+```{r}
+library(Hmisc)
+library(corrplot)
+library(ppcor)
+
+pdf('../Output/FigS8A-partcorr.pdf')
+par(mfrow = c(1, 2))
+
+
+#Partial Correlations
+p12 <- pcor(remove_missing(heart12))
+corr <- p12$estimate
+pmat <- p12$p.value
+
+p3 <- corrplot(
+  corr,
+  method = "color", #c("circle", "square", "ellipse", "number", "shade", "color", "pie"),
+  type = "upper", #c("full", "lower", "upper"),
+  bg = "white",
+  order = "original",   #c("original", "AOE", "FPC", "hclust", "alphabet"),
+  tl.col = "black",
+  tl.offset = 0.4,
+  tl.srt = 60, #label rotation
+  p.mat = pmat,
+  sig.level = 0.05,
+  insig ="label_sig", 
+  diag = FALSE #remove diagonal
+)
+p3
+p28 <- pcor(remove_missing(heart28))
+corr <- p28$estimate
+pmat <- p28$p.value
+p4 <- corrplot(
+  corr,
+  method = "color", #c("circle", "square", "ellipse", "number", "shade", "color", "pie"),
+  type = "upper", #c("full", "lower", "upper"),
+  bg = "white",
+  order = "original",   #c("original", "AOE", "FPC", "hclust", "alphabet"),
+  tl.col = "black",
+  tl.offset = 0.4,
+  tl.srt = 60, #label rotation
+  p.mat = pmat,
+  sig.level = 0.05,
+  insig ="label_sig", 
+  diag = FALSE #remove diagonal
+)
+
+dev.off()
+```
+
+### Plot: partial correlation removing habitat temperature effects
+
+```{r}
+pdf('../Output/FigS8B-habtemppartcorr.pdf')
+par(mfrow = c(1, 2))
+
+#Partial Correlations
+p12 <- pcor(remove_missing(heart12.ht))
+corr <- p12$estimate
+pmat <- p12$p.value
+p3 <- corrplot(
+  corr,
+  method = "color", #c("circle", "square", "ellipse", "number", "shade", "color", "pie"),
+  type = "upper", #c("full", "lower", "upper"),
+  bg = "white",
+  order = "original",   #c("original", "AOE", "FPC", "hclust", "alphabet"),
+  tl.col = "black",
+  tl.offset = 0.4,
+  tl.srt = 60, #label rotation
+  p.mat = pmat,
+  sig.level = 0.05,
+  insig ="label_sig", 
+  diag = FALSE #remove diagonal
+)
+
+p28 <- pcor(remove_missing(heart28.ht))
+corr <- p28$estimate
+pmat <- p28$p.value
+p4 <- corrplot(
+  corr,
+  method = "color", #c("circle", "square", "ellipse", "number", "shade", "color", "pie"),
+  type = "upper", #c("full", "lower", "upper"),
+  bg = "white",
+  order = "original",   #c("original", "AOE", "FPC", "hclust", "alphabet"),
+  tl.col = "black",
+  tl.offset = 0.4,
+  tl.srt = 60, #label rotation
+  p.mat = pmat,
+  sig.level = 0.05,
+  insig ="label_sig", 
+  diag = FALSE #remove diagonal
+  
+)
+
+dev.off()
+p3
+p4
+
+```
+
