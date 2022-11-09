@@ -5,6 +5,6 @@ Annotated RMD in Scripts
 All data files for script in Data
 Output figures
 
-Associaed with publication: 
+Associtaed with publication: 
 
-Feeling the heat: variation in thermal sensitivity within and among populations. (2022) *Journal of Experimental Biology* url[https://doi.org/10.1242/jeb.244831] 
+A. DeLiberto et al. (2022) Feeling the heat: variation in thermal sensitivity within and among populations. *Journal of Experimental Biology* [https://doi.org/10.1242/jeb.244831
